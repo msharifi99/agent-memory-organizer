@@ -1,0 +1,4 @@
+interface:
+  display_name: "Organize Memory"
+  short_description: "Save durable session memory to Obsidian"
+  default_prompt: "Use $organize to save the durable memory from this session."

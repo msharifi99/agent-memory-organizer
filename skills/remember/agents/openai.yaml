@@ -1,0 +1,4 @@
+interface:
+  display_name: "Remember Context"
+  short_description: "Load relevant Obsidian memory for a topic"
+  default_prompt: "Use $remember for the topic I am about to work on."
