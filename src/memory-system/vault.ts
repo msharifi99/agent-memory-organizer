@@ -23,9 +23,14 @@ export const SYSTEM_FOLDERS = [
   ".index",
 ] as const;
 
+const TRANSACTIONS_FOLDER = ".transactions";
+
 const SECRET_PATTERNS = [
   /\b(api[_-]?key|secret|password|token|credential)\b\s*[:=]\s*\S+/gi,
   /\b(sk-[A-Za-z0-9_-]{16,})\b/g,
+  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
+  /\b[A-Za-z]:[\\/][^\s"'`]+/g,
+  /\/(?:home|mnt|Users|srv|data|run|tmp|etc|var)\/[^\s"'`]+/g,
 ];
 
 export class VaultError extends Error {
@@ -121,7 +126,6 @@ export function memoryPath(vaultPath: string, slug: string): string {
 }
 
 export function ensureVault(config: MemoryConfig): string {
-  console.log("heyyy");
   const vault = config.vaultPath;
   if (!fs.existsSync(vault)) {
     const parent = path.dirname(vault);
@@ -138,8 +142,6 @@ export function ensureVault(config: MemoryConfig): string {
   const activityLog = path.join(vault, "activity-log.md");
   if (!fs.existsSync(activityLog))
     fs.writeFileSync(activityLog, "# Activity Log\n", "utf8");
-
-  console.log("vault", vault);
   return vault;
 }
 
@@ -172,6 +174,7 @@ function findMetadataFiles(root: string): string[] {
   if (!fs.existsSync(root)) return [];
   const files: string[] = [];
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name === TRANSACTIONS_FOLDER) continue;
     const fullPath = path.join(root, entry.name);
     if (entry.isDirectory()) {
       files.push(...findMetadataFiles(fullPath));
@@ -193,6 +196,9 @@ export function discoverMemories(
       continue;
     try {
       const record = loadMemory(path.dirname(metadataPath));
+      if (path.resolve(record.path) !== path.resolve(memoryPath(vault, record.slug))) {
+        continue;
+      }
       if (includeInactive || record.status === "active") records.push(record);
     } catch {
       continue;
@@ -217,7 +223,7 @@ export function writeJson(filePath: string, data: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
-export async function rebuildIndexes(
+export async function rebuildIndexesInActiveTransaction(
   vault: string,
   ai: AIClient,
   embeddingModel: string,
@@ -268,6 +274,90 @@ export async function rebuildIndexes(
     inventory_count: records.length,
     embedding_count: (embeddings.memories as unknown[]).length,
   };
+}
+
+type TransactionState = {
+  version: 1;
+  state: "active";
+  kind: string;
+  created_at: string;
+};
+
+function copyDirectoryContents(source: string, destination: string): void {
+  fs.mkdirSync(destination, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    if (entry.name === TRANSACTIONS_FOLDER) continue;
+    fs.cpSync(path.join(source, entry.name), path.join(destination, entry.name), {
+      recursive: true,
+      force: true,
+      preserveTimestamps: true,
+    });
+  }
+}
+
+function restoreTransaction(vault: string, transactionFolder: string): void {
+  const backup = path.join(transactionFolder, "backup");
+  for (const entry of fs.readdirSync(vault, { withFileTypes: true })) {
+    if (entry.name === TRANSACTIONS_FOLDER) continue;
+    fs.rmSync(path.join(vault, entry.name), { recursive: true, force: true });
+  }
+  if (fs.existsSync(backup)) copyDirectoryContents(backup, vault);
+  fs.rmSync(transactionFolder, { recursive: true, force: true });
+}
+
+export async function runVaultTransaction<T>(
+  vault: string,
+  kind: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const transactionRoot = path.join(vault, TRANSACTIONS_FOLDER);
+  const transactionFolder = path.join(transactionRoot, crypto.randomUUID());
+  const backup = path.join(transactionFolder, "backup");
+  fs.mkdirSync(backup, { recursive: true });
+  copyDirectoryContents(vault, backup);
+  writeJson(path.join(transactionFolder, "state.json"), {
+    version: 1,
+    state: "active",
+    kind,
+    created_at: utcNow(),
+  } satisfies TransactionState);
+
+  try {
+    const result = await operation();
+    fs.rmSync(transactionFolder, { recursive: true, force: true });
+    return result;
+  } catch (error) {
+    restoreTransaction(vault, transactionFolder);
+    throw error;
+  }
+}
+
+export function recoverVaultTransactions(vault: string): number {
+  const transactionRoot = path.join(vault, TRANSACTIONS_FOLDER);
+  if (!fs.existsSync(transactionRoot)) return 0;
+  let recovered = 0;
+  for (const entry of fs.readdirSync(transactionRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const transactionFolder = path.join(transactionRoot, entry.name);
+    const statePath = path.join(transactionFolder, "state.json");
+    if (!fs.existsSync(statePath)) {
+      fs.rmSync(transactionFolder, { recursive: true, force: true });
+      continue;
+    }
+    restoreTransaction(vault, transactionFolder);
+    recovered += 1;
+  }
+  return recovered;
+}
+
+export async function rebuildIndexes(
+  vault: string,
+  ai: AIClient,
+  embeddingModel: string,
+): Promise<Record<string, number>> {
+  return runVaultTransaction(vault, "rebuild_index", () =>
+    rebuildIndexesInActiveTransaction(vault, ai, embeddingModel),
+  );
 }
 
 export function loadEmbeddings(vault: string): Map<string, number[]> {

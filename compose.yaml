@@ -1,0 +1,38 @@
+services:
+  memory-mcp:
+    build:
+      context: .
+    image: agent-memory-mcp:local
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: node
+    environment:
+      AGENT_MEMORY_CONFIG: /app/config/config.json
+      AGENT_MEMORY_VAULT: /data/vault
+      MCP_PORT: "3000"
+    ports:
+      - "3003:3000"
+    volumes:
+      - ${MEMORY_VAULT_DIR}:/data/vault
+      - ${MEMORY_CONFIG_DIR}:/app/config:ro
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    stop_grace_period: 10m
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"

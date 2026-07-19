@@ -18,6 +18,8 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+config/
+vault/
 
 # Editor and OS files
 .DS_Store
@@ -31,4 +33,3 @@ Thumbs.db
 tmp/
 
 .scratch/
-

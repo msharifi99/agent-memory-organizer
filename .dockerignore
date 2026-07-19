@@ -1,0 +1,10 @@
+.git
+.scratch
+node_modules
+tests
+skills
+docs
+*.log
+.env
+config
+vault

@@ -3,11 +3,26 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import type { AIClient, JsonObject, JsonSchemaFormat } from "../src/memory-system/ai.ts";
-import { ConfigError, loadConfig } from "../src/memory-system/config.ts";
+import {
+  ConfigError,
+  DEFAULT_CONFIG_PATH,
+  PROJECT_ROOT,
+  loadConfig,
+  memoryConfigFromObject,
+} from "../src/memory-system/config.ts";
 import type { MemoryConfig } from "../src/memory-system/config.ts";
-import { discoverMemories, ensureVault, loadMemory, rebuildIndexes } from "../src/memory-system/vault.ts";
+import {
+  createMemory,
+  discoverMemories,
+  ensureVault,
+  loadMemory,
+  rebuildIndexes,
+  recoverVaultTransactions,
+  runVaultTransaction,
+} from "../src/memory-system/vault.ts";
 import { EXTRACTOR_RESPONSE_SCHEMA, organizeSession, rememberTopic } from "../src/memory-system/workflows.ts";
 
 class FakeAI implements AIClient {
@@ -34,6 +49,24 @@ class FakeAI implements AIClient {
     const response = this.responses.shift();
     assert.ok(response, "Unexpected AI call");
     return response;
+  }
+}
+
+class FailingNthEmbeddingAI extends FakeAI {
+  private embeddingCalls = 0;
+  private readonly failAt: number;
+
+  constructor(responses: JsonObject[], failAt: number) {
+    super(responses);
+    this.failAt = failAt;
+  }
+
+  embed(text: string): number[] {
+    this.embeddingCalls += 1;
+    if (this.embeddingCalls === this.failAt) {
+      throw new Error("Injected embedding failure.");
+    }
+    return super.embed(text);
   }
 }
 
@@ -81,6 +114,38 @@ function sessionRecord(): JsonObject {
 test("missing config fails clearly", () => withTempDir((tempDir) => {
   assert.throws(() => loadConfig(path.join(tempDir, "missing.json")), ConfigError);
 }));
+
+test("default config is project-local", () => {
+  assert.equal(PROJECT_ROOT, path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
+  assert.equal(DEFAULT_CONFIG_PATH, path.join(PROJECT_ROOT, "config", "config.json"));
+});
+
+test("AGENT_MEMORY_VAULT paths resolve from the project root", () => {
+  const config = memoryConfigFromObject(
+    {
+      provider: "openai",
+      chat_model: "chat-test",
+      embedding_model: "embedding-test",
+      api_key: "test-key",
+    },
+    { AGENT_MEMORY_VAULT: "vault" },
+  );
+  assert.equal(config.vaultPath, path.join(PROJECT_ROOT, "vault"));
+});
+
+test("AGENT_MEMORY_VAULT is required instead of vault_path", () => {
+  assert.throws(
+    () =>
+      memoryConfigFromObject({
+        vault_path: "vault",
+        provider: "openai",
+        chat_model: "chat-test",
+        embedding_model: "embedding-test",
+        api_key: "test-key",
+      }, {}),
+    /Missing required environment variable: AGENT_MEMORY_VAULT/,
+  );
+});
 
 test("vault root is created when parent exists", () => withTempDir((tempDir) => {
   const vault = path.join(tempDir, "Agent Memory");
@@ -139,6 +204,96 @@ test("organize creates memory source note and indexes", async () => withTempDir(
   const embeddings = JSON.parse(fs.readFileSync(path.join(vault, ".index", "embeddings.json"), "utf8"));
   assert.equal(embeddings.memories.length, 1);
 }));
+
+test("organize rolls back memory, source, metadata, and indexes when embedding rebuild fails", async () =>
+  withTempDir(async (tempDir) => {
+    const vault = path.join(tempDir, "vault");
+    const config = configFor(vault);
+    await organizeSession(config, new FakeAI([
+      { relevant_slugs: [], why: "New memory." },
+      {
+        source_note: { title: "Initial" },
+        operations: [{
+          type: "create_memory",
+          title: "Transactional Memory",
+          suggested_slug: "transactional-memory",
+          confidence: "high",
+          sections: { summary: ["Previously committed content."] },
+        }],
+      },
+    ]), sessionRecord());
+
+    const memoryPath = path.join(vault, "transactional-memory", "memory.md");
+    const metadataPath = path.join(vault, "transactional-memory", "metadata.json");
+    const inventoryPath = path.join(vault, ".index", "inventory.json");
+    const embeddingsPath = path.join(vault, ".index", "embeddings.json");
+    const before = {
+      memory: fs.readFileSync(memoryPath, "utf8"),
+      metadata: fs.readFileSync(metadataPath, "utf8"),
+      inventory: fs.readFileSync(inventoryPath, "utf8"),
+      embeddings: fs.readFileSync(embeddingsPath, "utf8"),
+      sources: fs.readdirSync(path.join(vault, "sources")).sort(),
+    };
+
+    const failingAi = new FailingNthEmbeddingAI([
+      { relevant_slugs: ["transactional-memory"], why: "Update it." },
+      {
+        source_note: { title: "Failed Update" },
+        operations: [{
+          type: "update_memory",
+          slug: "transactional-memory",
+          confidence: "high",
+          section_updates: { summary: ["Uncommitted content."] },
+          supersedes: [],
+          conflicts: [],
+        }],
+      },
+    ], 2);
+
+    await assert.rejects(
+      () => organizeSession(config, failingAi, sessionRecord()),
+      /Injected embedding failure/,
+    );
+    assert.equal(fs.readFileSync(memoryPath, "utf8"), before.memory);
+    assert.equal(fs.readFileSync(metadataPath, "utf8"), before.metadata);
+    assert.equal(fs.readFileSync(inventoryPath, "utf8"), before.inventory);
+    assert.equal(fs.readFileSync(embeddingsPath, "utf8"), before.embeddings);
+    assert.deepEqual(fs.readdirSync(path.join(vault, "sources")).sort(), before.sources);
+  }));
+
+test("startup recovery restores an interrupted transaction before the vault is used", async () =>
+  withTempDir(async (tempDir) => {
+    const vault = ensureVault(configFor(path.join(tempDir, "vault")));
+    createMemory(vault, {
+      title: "Recovery Memory",
+      suggested_slug: "recovery-memory",
+      confidence: "high",
+      sections: { summary: ["Committed state."] },
+    });
+    const memoryFile = path.join(vault, "recovery-memory", "memory.md");
+    const committed = fs.readFileSync(memoryFile, "utf8");
+    let markMutationStarted = () => {};
+    const mutationStarted = new Promise<void>((resolve) => {
+      markMutationStarted = resolve;
+    });
+    let allowOperationToFinish = () => {};
+    const operationMayFinish = new Promise<void>((resolve) => {
+      allowOperationToFinish = resolve;
+    });
+
+    const interrupted = runVaultTransaction(vault, "organize", async () => {
+      fs.writeFileSync(memoryFile, "# Partially applied state\n");
+      markMutationStarted();
+      await operationMayFinish;
+    });
+    await mutationStarted;
+    assert.notEqual(fs.readFileSync(memoryFile, "utf8"), committed);
+
+    assert.equal(recoverVaultTransactions(vault), 1);
+    assert.equal(fs.readFileSync(memoryFile, "utf8"), committed);
+    allowOperationToFinish();
+    await interrupted;
+  }));
 
 test("dry run does not write memory or source notes", async () => withTempDir(async (tempDir) => {
   const vault = path.join(tempDir, "vault");
@@ -321,6 +476,44 @@ test("rebuild regenerates indexes from canonical files", async () => withTempDir
   assert.equal(report.inventory_count, 1);
   assert.ok(fs.existsSync(path.join(vault, ".index", "inventory.json")));
 }));
+
+test("failed standalone rebuild preserves the committed indexes and metadata", async () =>
+  withTempDir(async (tempDir) => {
+    const vault = path.join(tempDir, "vault");
+    const config = configFor(vault);
+    await organizeSession(config, new FakeAI([
+      { relevant_slugs: [], why: "New." },
+      {
+        source_note: { title: "Initial" },
+        operations: [{
+          type: "create_memory",
+          title: "Stable Index",
+          suggested_slug: "stable-index",
+          confidence: "high",
+          sections: { summary: ["Keep the previous index usable."] },
+        }],
+      },
+    ]), sessionRecord());
+    const files = [
+      path.join(vault, ".index", "inventory.json"),
+      path.join(vault, ".index", "embeddings.json"),
+      path.join(vault, "stable-index", "metadata.json"),
+    ];
+    const committed = files.map((file) => fs.readFileSync(file, "utf8"));
+
+    await assert.rejects(
+      () => rebuildIndexes(
+        vault,
+        new FailingNthEmbeddingAI([], 1),
+        config.embeddingModel,
+      ),
+      /Injected embedding failure/,
+    );
+    assert.deepEqual(
+      files.map((file) => fs.readFileSync(file, "utf8")),
+      committed,
+    );
+  }));
 
 test("low confidence new memories go to inbox", async () => withTempDir(async (tempDir) => {
   const vault = path.join(tempDir, "vault");

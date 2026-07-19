@@ -17,7 +17,7 @@ Use this skill to load relevant memory for the current session without pulling i
 
 ## Script Behavior
 
-The script reads config from `~/.agent-memory/config.json` unless `AGENT_MEMORY_CONFIG` or `--config` points elsewhere. Missing config is a hard failure.
+The script reads config from `config/config.json` in the project root unless `AGENT_MEMORY_CONFIG` or `--config` points elsewhere. `AGENT_MEMORY_VAULT` must point to the vault directory. Missing config or vault environment variable is a hard failure.
 
 The script uses embeddings as an early filter, then asks AI to make the final relevance decision. Every returned packet includes `why_loaded`.
 
@@ -25,7 +25,6 @@ Expected config fields:
 
 ```json
 {
-  "vault_path": "C:/Users/Rebin/Documents/Agent Memory",
   "provider": "openai",
   "chat_model": "gpt-5-mini",
   "embedding_model": "text-embedding-3-small",

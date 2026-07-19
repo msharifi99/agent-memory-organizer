@@ -5,7 +5,18 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "start:mcp": "node src/mcp/main.ts",
     "organize": "node skills/organize/scripts/organize.ts",
     "remember": "node skills/remember/scripts/remember.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "jose": "^6.2.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2"
   }
 }

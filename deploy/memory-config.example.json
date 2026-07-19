@@ -1,0 +1,7 @@
+{
+  "provider": "openai",
+  "chat_model": "gpt-5-mini",
+  "embedding_model": "text-embedding-3-small",
+  "cloudflare_access_team_domain": "your-team.cloudflareaccess.com",
+  "cloudflare_access_audience": "replace-with-access-application-aud"
+}

@@ -1,0 +1,152 @@
+{
+  "$schema": "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json",
+  "schema_version": 1,
+  "app_info": {
+    "display_name": "Personal Agent Memory",
+    "subtitle": "Save and retrieve memory",
+    "description": "Personal Agent Memory helps users retrieve relevant durable context, save useful session knowledge, browse stored memories, and maintain the private memory vault.",
+    "category": "PRODUCTIVITY"
+  },
+  "tools": {
+    "remember": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves context for a topic but can initialize missing private vault folders and files.",
+        "open_world_justification": "Operates on the authenticated user's private vault and does not publish or change public internet state.",
+        "destructive_justification": "Does not delete, overwrite, revoke access, or perform irreversible actions."
+      }
+    },
+    "organize": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Analyzes a session record and can create, update, deactivate, and index private memory records.",
+        "open_world_justification": "Changes are limited to the authenticated user's private vault and are not published publicly.",
+        "destructive_justification": "Can overwrite existing memory content or deactivate a memory record when organizing a session."
+      }
+    },
+    "rebuild_index": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Regenerates derived indexes and updates private memory metadata.",
+        "open_world_justification": "Updates remain within the authenticated user's private vault and do not create public internet state.",
+        "destructive_justification": "Overwrites derived index files and may overwrite metadata fields while rebuilding them."
+      }
+    },
+    "init_vault": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Creates missing private vault folders and an activity log when initialization is needed.",
+        "open_world_justification": "Only creates private local vault structure and does not publish or change public internet state.",
+        "destructive_justification": "Does not delete or overwrite existing vault content."
+      }
+    },
+    "list_memories": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Lists private memory metadata but can initialize missing vault folders and files first.",
+        "open_world_justification": "Only accesses the authenticated user's private vault and does not publish or change public internet state.",
+        "destructive_justification": "Does not delete, overwrite, revoke access, or perform irreversible actions."
+      }
+    },
+    "get_memory": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Reads a private memory by slug but can initialize missing vault folders and files first.",
+        "open_world_justification": "Only accesses the authenticated user's private vault and does not publish or change public internet state.",
+        "destructive_justification": "Does not delete, overwrite, revoke access, or perform irreversible actions."
+      }
+    }
+  },
+  "test_cases": [
+    {
+      "description": "Initialize a new private memory vault.",
+      "user_prompt": "Set up my memory vault so it is ready to use.",
+      "file_attachment_urls": null,
+      "tools_triggered": "init_vault",
+      "expected_output": "Confirms that the private vault structure is available.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Retrieve context for an explicit work topic.",
+      "user_prompt": "What durable context do I have about the remote MCP service?",
+      "file_attachment_urls": null,
+      "tools_triggered": "remember",
+      "expected_output": "Returns compact relevant memory packets, advisory guidance, and any applicable continuation brief.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Persist durable memory from an explicit session record.",
+      "user_prompt": "Organize and save this session record: we decided to use managed OAuth and need to verify authentication next.",
+      "file_attachment_urls": null,
+      "tools_triggered": "organize",
+      "expected_output": "Persists and reports the durable memory changes extracted from the session record.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Browse the available durable memories in stable order.",
+      "user_prompt": "List the memories in my vault, starting with the first page.",
+      "file_attachment_urls": null,
+      "tools_triggered": "list_memories",
+      "expected_output": "Returns a page of memory metadata and a continuation cursor only when more results are available.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Read a selected memory in full.",
+      "user_prompt": "Open the memory named remote-memory-mcp.",
+      "file_attachment_urls": null,
+      "tools_triggered": "get_memory",
+      "expected_output": "Returns the selected memory's Markdown and safe metadata, or a clear error when it does not exist.",
+      "expected_output_url": null
+    }
+  ],
+  "negative_test_cases": [
+    {
+      "description": "Do not invoke the app for unrelated calendar requests.",
+      "user_prompt": "What meetings do I have tomorrow?",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The app should not be invoked because calendar scheduling is outside its supported workflows.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Do not invoke the app to search the public web.",
+      "user_prompt": "Find the latest public news about Cloudflare.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The app should not be invoked because it only manages private memory context.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Do not invoke the app for unrelated content generation.",
+      "user_prompt": "Write a poem about Amsterdam canals.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The app should not be invoked because creative writing alone does not require memory retrieval or management.",
+      "expected_output_url": null
+    }
+  ]
+}

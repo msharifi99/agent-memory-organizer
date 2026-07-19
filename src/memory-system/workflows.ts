@@ -11,7 +11,8 @@ import {
   discoverMemories,
   ensureVault,
   normalizeSlug,
-  rebuildIndexes,
+  rebuildIndexesInActiveTransaction,
+  runVaultTransaction,
   scrubSecretText,
   topEmbeddingCandidates,
   updateMemory,
@@ -293,25 +294,18 @@ function operationIsMeaningful(operation: Record<string, unknown>): boolean {
   return operation.type != null && operation.type !== "no_op";
 }
 
-export async function organizeSession(
+async function organizeSessionUntransactional(
   config: MemoryConfig,
   ai: AIClient,
   sessionRecord: Record<string, unknown>,
   dryRun = false,
 ): Promise<OrganizeResult> {
   const vault = ensureVault(config);
-  console.log("vault", vault);
   const candidates = await topEmbeddingCandidates(
     vault,
     ai,
     sessionQuery(sessionRecord),
     config.maxEmbeddingCandidates,
-  );
-  console.log(
-    `Found ${candidates.length} candidate memories for organizing.`,
-    candidates
-      .map(([record, score]) => `- ${record.slug} (score: ${score.toFixed(4)})`)
-      .join("\n"),
   );
   const router = await ai.chatJson(ORGANIZE_ROUTER_PROMPT, {
     session: sessionRecord,
@@ -346,7 +340,6 @@ export async function organizeSession(
     EXTRACTOR_RESPONSE_SCHEMA,
   );
   assertExtractorResponse(extraction);
-  console.log("Extraction result:", JSON.stringify(extraction, null, 2));
 
   const operations = asArray(extraction.operations).filter(
     (item): item is Record<string, unknown> =>
@@ -366,7 +359,6 @@ export async function organizeSession(
   const changedSlugs: string[] = [];
   const noOps: string[] = [];
   for (const operation of operations) {
-    console.log("Processing operation:", operation);
     const opType = operation.type;
     if (opType === "create_memory") {
       const slug = normalizeSlug(
@@ -401,7 +393,11 @@ export async function organizeSession(
     embedding_count: 0,
   };
   if (!dryRun && changedSlugs.length > 0) {
-    indexReport = await rebuildIndexes(vault, ai, config.embeddingModel);
+    indexReport = await rebuildIndexesInActiveTransaction(
+      vault,
+      ai,
+      config.embeddingModel,
+    );
     appendActivityLog(vault, changedSlugs, sourceRef);
   }
 
@@ -440,6 +436,21 @@ export async function organizeSession(
         "Saved memory is advisory context for future sessions, not an override of live instructions.",
     },
   };
+}
+
+export async function organizeSession(
+  config: MemoryConfig,
+  ai: AIClient,
+  sessionRecord: Record<string, unknown>,
+  dryRun = false,
+): Promise<OrganizeResult> {
+  const vault = ensureVault(config);
+  if (dryRun) {
+    return organizeSessionUntransactional(config, ai, sessionRecord, true);
+  }
+  return runVaultTransaction(vault, "organize", () =>
+    organizeSessionUntransactional(config, ai, sessionRecord, false),
+  );
 }
 
 export function appendActivityLog(

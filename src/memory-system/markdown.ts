@@ -13,7 +13,9 @@ export type SectionKey = keyof typeof SECTION_TITLES;
 export type Sections = Record<SectionKey, string[]>;
 
 export function emptySections(): Sections {
-  return Object.fromEntries(Object.keys(SECTION_TITLES).map((key) => [key, []])) as Sections;
+  return Object.fromEntries(
+    Object.keys(SECTION_TITLES).map((key) => [key, []]),
+  ) as unknown as Sections;
 }
 
 export function normalizeItems(value: unknown): string[] {
@@ -56,7 +58,12 @@ export function renderMemory(title: string, sections: Sections): string {
 
 export function parseMemory(markdown: string): { title: string; sections: Sections } {
   const sections = emptySections();
-  const headingToKey = new Map(Object.entries(SECTION_TITLES).map(([key, heading]) => [heading, key as SectionKey]));
+  const headingToKey = new Map<string, SectionKey>(
+    Object.entries(SECTION_TITLES).map(([key, heading]) => [
+      heading,
+      key as SectionKey,
+    ]),
+  );
   let title = "Untitled Memory";
   let currentKey: SectionKey | undefined;
 
